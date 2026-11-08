@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="cs">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Tajná zpráva – AES-256-GCM</title>
+<style>
+:root{font-family:system-ui,-apple-system,sans-serif;color-scheme:dark}
+body{background:#10151b;color:#edf4f0;margin:0;padding:24px}
+main{max-width:650px;margin:30px auto;background:#1b242d;padding:28px;border-radius:18px}
+h1{margin-top:0}label{display:block;margin:18px 0 7px}
+textarea,input{box-sizing:border-box;width:100%;padding:13px;border-radius:9px;border:1px solid #53616b;background:#10171d;color:white;font:inherit}
+textarea{min-height:130px}button{background:#9ae675;color:#102016;border:0;border-radius:9px;padding:12px 18px;font-weight:700;cursor:pointer;margin:12px 8px 0 0}
+button:disabled{opacity:.5}#status{overflow-wrap:anywhere}a{color:#a6e8ff;overflow-wrap:anywhere}
+small{color:#b5c2ca}.hidden{display:none}.result{background:#111b21;padding:15px;border-radius:10px;margin-top:18px;overflow-wrap:anywhere}
+</style>
+</head>
+<body><main>
+<h1>🔐 Tajná zpráva</h1>
+<p>Šifrování AES-256-GCM probíhá pouze ve tvém prohlížeči. Zpráva se nikam neodesílá.</p>
+<section id="create">
+<label for="message">Tvoje zpráva</label><textarea id="message" placeholder="Napiš tajnou zprávu..."></textarea>
+<label for="password">Heslo (alespoň 12 znaků)</label><input id="password" type="password" autocomplete="new-password">
+<button id="encrypt">Zašifrovat a vytvořit odkaz</button>
+<div id="output" class="result hidden"><strong>Odkaz:</strong><p><a id="sharelink" target="_blank" rel="noopener"></a></p><button id="copy">Kopírovat odkaz</button><p><small>Heslo pošli příjemci jinou cestou. Odkaz může být dlouhý.</small></p></div>
+</section>
+<section id="read" class="hidden">
+<p>Obdržel(a) jsi zašifrovanou zprávu. Pro její zobrazení zadej heslo.</p>
+<label for="unlockPassword">Heslo</label><input id="unlockPassword" type="password" autocomplete="off">
+<button id="decrypt">Odemknout zprávu</button>
+<div id="plain" class="result hidden" style="white-space:pre-wrap"></div>
+</section>
+<p id="status" role="status"></p>
+<hr><small>Provozuj na HTTPS (například GitHub Pages). Samotný soubor otevřený jako file:// nemusí podporovat Web Crypto. Obsah odkazu je zašifrovaný, ale odkaz může zůstat v historii prohlížeče nebo být přeposlán. Příjemce může odemčenou zprávu zkopírovat.</small>
+</main>
+<script>
+"use strict";
+const $=id=>document.getElementById(id);
+const enc=new TextEncoder(),dec=new TextDecoder();
+const b64=bytes=>btoa(String.fromCharCode(...bytes)).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
+const unb64=str=>Uint8Array.from(atob(str.replace(/-/g,"+").replace(/_/g,"/")),c=>c.charCodeAt(0));
+const status=msg=>$("status").textContent=msg;
+async function key(password,salt){
+ const material=await crypto.subtle.importKey("raw",enc.encode(password),"PBKDF2",false,["deriveKey"]);
+ return crypto.subtle.deriveKey({name:"PBKDF2",salt,iterations:310000,hash:"SHA-256"},material,{name:"AES-GCM",length:256},false,["encrypt","decrypt"]);
+}
+if(location.hash.startsWith("#msg=")){
+ $("create").classList.add("hidden");$("read").classList.remove("hidden");
+}
+$("encrypt").onclick=async()=>{
+ try{
+  status("");
+  if(!crypto.subtle)throw Error("Stránka musí být otevřena přes HTTPS.");
+  const message=$("message").value,password=$("password").value;
+  if(!message)throw Error("Napiš zprávu.");
+  if(password.length<12)throw Error("Použij heslo alespoň 12 znaků.");
+  const salt=crypto.getRandomValues(new Uint8Array(16)),iv=crypto.getRandomValues(new Uint8Array(12));
+  const cipher=new Uint8Array(await crypto.subtle.encrypt({name:"AES-GCM",iv},await key(password,salt),enc.encode(message)));
+  const payload={v:1,s:b64(salt),i:b64(iv),c:b64(cipher)};
+  const url=new URL(location.href);url.hash="msg="+b64(enc.encode(JSON.stringify(payload)));
+  $("sharelink").href=url.href;$("sharelink").textContent=url.href;
+  $("output").classList.remove("hidden");
+  status("Odkaz je připraven.");
+ }catch(e){status(e.message)}
+};
+$("copy").onclick=async()=>{
+ try{await navigator.clipboard.writeText($("sharelink").href);status("Odkaz zkopírován.");}
+ catch{status("Kopírování se nezdařilo. Označ a zkopíruj odkaz ručně.")}
+};
+$("decrypt").onclick=async()=>{
+ try{
+  status("");$("plain").classList.add("hidden");
+  const raw=location.hash.slice(5);
+  if(raw.length>100000)throw Error("Zpráva je příliš dlouhá.");
+  const p=JSON.parse(dec.decode(unb64(raw)));
+  if(p.v!==1)throw Error("Nepodporovaná verze zprávy.");
+  const salt=unb64(p.s),iv=unb64(p.i),cipher=unb64(p.c);
+  if(salt.length!==16||iv.length!==12)throw Error("Neplatný formát zprávy.");
+  const result=await crypto.subtle.decrypt({name:"AES-GCM",iv},await key($("unlockPassword").value,salt),cipher);
+  $("plain").textContent=dec.decode(result);
+  $("plain").classList.remove("hidden");
+  status("Zpráva odemčena.");
+ }catch(e){status("Zprávu nelze odemknout. Zkontroluj heslo a neporušenost odkazu.")}
+};
+</script></body></html>
